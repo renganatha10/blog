@@ -1,0 +1,22 @@
+base_url = "https://example.com"
+title = "My Blog"
+description = "A personal blog"
+default_language = "en"
+# theme = ""  # set this to a theme name once you add one under themes/
+
+compile_sass = true
+minify_html = false
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+
+taxonomies = [
+    {name = "tags", feed = true},
+    {name = "categories", feed = true},
+]
+
+[markdown]
+highlight_code = true
+highlight_theme = "base16-ocean-dark"
+
+[extra]
+author = "Your Name"
