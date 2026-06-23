@@ -1,5 +1,5 @@
 +++
 title = "Blog"
 sort_by = "date"
-template = "blog.html"
+template = "section.html"
 +++

@@ -6,43 +6,13 @@ description = "Personal notes on Apache Kafka — brokers, producers, consumers,
 tags = ["kafka"]
 +++
 
-## Broker, ZooKeeper, KRaft, and Leader Election
+## Broker, ZooKeeper, and KRaft
 
-### ZooKeeper Mode (legacy — removed in Kafka 4.0)
+A **broker** is a Kafka server that stores topic partitions, handles producer writes, and serves consumer reads. A Kafka cluster is simply a group of brokers. One broker per partition acts as the **partition leader** — it handles all reads and writes for that partition while the others replicate it as followers.
 
-- On startup, each broker registers itself in ZooKeeper as an **ephemeral znode** (disappears automatically if the broker disconnects).
-- One broker is elected as the **Controller** by competing to create `/controller` in ZooKeeper — first writer wins.
-- The Controller watches ZooKeeper for events: brokers joining/leaving, topic changes, ISR changes.
-- ZooKeeper runs its own consensus protocol internally (**ZAB — ZooKeeper Atomic Broadcast**) to keep its own replicas consistent — this is separate from Kafka's partition leader election.
-- **Partition leader election**: when a broker dies, its ephemeral znode disappears; the Controller detects this and promotes the first replica in the ISR list as the new partition leader, then writes the new leader assignment back to ZooKeeper so all other brokers pick it up.
-- **Drawback**: ZooKeeper was a separate cluster to operate; the Controller had to reload all metadata from ZooKeeper on restart (slow); metadata write path went ZooKeeper → Controller → brokers (multiple hops).
+**ZooKeeper (legacy — removed in Kafka 4.0)** was the external coordination service Kafka relied on to store cluster metadata: which brokers are alive, who is the controller, and which replicas are in sync. One broker was elected **Controller** by racing to write a node in ZooKeeper; the Controller then managed partition leadership changes whenever brokers joined or left. The downside was an extra cluster to operate and a slow metadata path that went through ZooKeeper.
 
-### KRaft Mode (production-ready since Kafka 3.3; ZooKeeper fully removed in Kafka 4.0)
-
-- Kafka now manages its own metadata using the **Raft consensus algorithm** — no external ZooKeeper dependency.
-- A subset of nodes (3 or 5) form the **KRaft quorum**. These can be dedicated controller nodes or combined broker+controller nodes.
-- One controller in the quorum is elected **Active Controller** via Raft leader election (requires majority: 2 of 3, or 3 of 5).
-- All metadata changes (topic creation, partition reassignments, leader elections) are written as entries in the Raft log, replicated to all quorum members before being committed.
-- This log lives in an internal topic called **`__cluster_metadata`**.
-- Brokers subscribe to the Active Controller and receive metadata updates as a stream — no ZooKeeper polling.
-
-### How Raft Leader Election Works
-
-Each node is always in one of three states: **Leader**, **Follower**, or **Candidate**.
-
-1. Followers expect periodic **heartbeats** from the Leader.
-2. If no heartbeat arrives within a randomised **election timeout**, a Follower promotes itself to **Candidate**, increments its term, and sends `RequestVote` RPCs to peers.
-3. A Candidate wins if it receives votes from a **strict majority**; it then becomes the new Leader and starts sending heartbeats.
-4. Randomised timeouts prevent multiple candidates from splitting votes indefinitely.
-5. Raft guarantees **at most one Leader per term**, preventing split-brain scenarios.
-
-### Partition Leader Election (applies to both modes)
-
-- The **Active Controller** (KRaft) or **Controller broker** (ZooKeeper) monitors broker liveness.
-- When a broker goes down, the Controller selects a new partition leader from the **ISR list** for every partition that lost its leader.
-- The first eligible replica in the ISR (ideally the **preferred replica**) is promoted.
-- If the ISR is empty and `unclean.leader.election.enable=true`, an out-of-sync replica can be elected — this risks **data loss** but keeps the partition available.
-- The new leader assignment is broadcast to all brokers via metadata propagation.
+**KRaft (production-ready since Kafka 3.3)** replaced ZooKeeper by embedding the Raft consensus algorithm directly into Kafka. A small quorum of controller nodes (typically 3 or 5) elects an **Active Controller** among themselves and replicates all cluster metadata through an internal topic called `__cluster_metadata`. Brokers receive metadata updates as a stream from the Active Controller — no separate ZooKeeper process needed.
 
 ---
 
@@ -100,9 +70,9 @@ ISR shrinks              →  [Leader]                            ✗ 1 in ISR <
 
 Without idempotence, a transient network failure during a produce request can cause a duplicate:
 
-1. Producer sends a batch → broker writes it → broker acknowledgement is lost in transit.
-2. Producer times out and retries → broker writes the same batch **again**.
-3. Consumer sees the message twice.
+- Producer sends a batch → broker writes it → broker acknowledgement is lost in transit.
+- Producer times out and retries → broker writes the same batch **again**.
+- Consumer sees the message twice.
 
 #### How It Works Internally
 
@@ -130,8 +100,8 @@ The producer client has two internal components:
 
 With idempotent producer the Sender adds two guarantees:
 
-1. **Sequence assignment happens in the Sender thread**, not the calling thread, so sequence numbers are assigned in the exact order batches are drained from the accumulator. This keeps ordering consistent even when multiple application threads call `send()` concurrently.
-2. **In-flight tracking per partition**: the Sender keeps a queue of in-flight batches per `(broker, partition)`. On a retriable error, the batch is **re-queued at the front** of the deque with its original sequence numbers intact — the batch object is not recreated. This preserves the ordering the broker expects.
+- **Sequence assignment happens in the Sender thread**, not the calling thread, so sequence numbers are assigned in the exact order batches are drained from the accumulator. This keeps ordering consistent even when multiple application threads call `send()` concurrently.
+- **In-flight tracking per partition**: the Sender keeps a queue of in-flight batches per `(broker, partition)`. On a retriable error, the batch is **re-queued at the front** of the deque with its original sequence numbers intact — the batch object is not recreated. This preserves the ordering the broker expects.
 
 ```
 Application thread(s)         Sender thread           Broker
@@ -215,9 +185,9 @@ try {
 
 Kafka has no native negative-acknowledgement. When a single record fails processing:
 
-1. **Do not commit** the offset of the failed record — it will be re-delivered on the next `poll()` after a restart or rebalance.
-2. **Seek back** explicitly: call `consumer.seek(partition, failedOffset)` to re-position the consumer to the failed record without waiting for a crash/rebalance.
-3. **Route to a retry topic**: instead of blocking, publish the failed record to a `<topic>.retry` topic and commit the original offset. A separate consumer processes the retry topic with backoff logic.
+- **Do not commit** the offset of the failed record — it will be re-delivered on the next `poll()` after a restart or rebalance.
+- **Seek back** explicitly: call `consumer.seek(partition, failedOffset)` to re-position the consumer to the failed record without waiting for a crash/rebalance.
+- **Route to a retry topic**: instead of blocking, publish the failed record to a `<topic>.retry` topic and commit the original offset. A separate consumer processes the retry topic with backoff logic.
 
 Option 2 (seek back) is simple but blocks the partition — all records after the failed one are stuck until the failure is resolved. Option 3 (retry topic) is preferred for production as it decouples failure handling from the main consumer's throughput.
 
@@ -265,9 +235,9 @@ main-topic  ──►  [Consumer]  ──failure──►  topic.retry-1
                                               commit               │──failure──►  topic.dlt
 ```
 
-1. Main consumer catches a processing exception → publishes the original record (with added headers: `retry-count`, `original-topic`, `error-message`) to `topic.retry-1` → commits the offset and continues.
-2. A dedicated retry consumer subscribes to `topic.retry-1`, applies a delay (`Thread.sleep` or a scheduled poll pause), and retries the record.
-3. On repeated failure the record is promoted to `topic.retry-2` (longer delay), and eventually to a **Dead Letter Topic (DLT)** for manual inspection.
+- Main consumer catches a processing exception → publishes the original record (with added headers: `retry-count`, `original-topic`, `error-message`) to `topic.retry-1` → commits the offset and continues.
+- A dedicated retry consumer subscribes to `topic.retry-1`, applies a delay (`Thread.sleep` or a scheduled poll pause), and retries the record.
+- On repeated failure the record is promoted to `topic.retry-2` (longer delay), and eventually to a **Dead Letter Topic (DLT)** for manual inspection.
 
 Spring Kafka's `@RetryableTopic` implements this pattern automatically with configurable backoff and DLT routing.
 
@@ -495,7 +465,7 @@ Roughly 60–70% smaller in practice for typical domain objects. Savings grow la
 
 ### How the Schema Registry Fits In
 
-1. **Producer** serializes a record using the Avro schema → checks/registers the schema in the Registry → receives a schema ID → prepends the 5-byte header → sends to Kafka.
-2. **Consumer** reads a message → reads the schema ID from the header → fetches the schema from the Registry (cached after first fetch) → deserializes the binary payload.
+- **Producer** serializes a record using the Avro schema → checks/registers the schema in the Registry → receives a schema ID → prepends the 5-byte header → sends to Kafka.
+- **Consumer** reads a message → reads the schema ID from the header → fetches the schema from the Registry (cached after first fetch) → deserializes the binary payload.
 
 The schema is fetched **once per unique schema ID** and cached locally — subsequent deserialization is a pure in-memory lookup.

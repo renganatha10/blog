@@ -2,7 +2,8 @@ base_url = "https://blog.rengaonline.in"
 title = "Renga's Learning"
 description = "Blog to add my leaning on tech contents"
 default_language = "en"
-# theme = ""  # set this to a theme name once you add one under themes/
+author = "Renganatha"
+theme = "terminus"
 
 compile_sass = true
 minify_html = false
@@ -15,8 +16,11 @@ taxonomies = [
 ]
 
 [markdown]
+
+[markdown.highlighting]
 highlight_code = true
-highlight_theme = "base16-ocean-dark"
+theme = "dracula"
 
 [extra]
-author = "Renganatha"
+copyright = "© $YEAR $AUTHOR"
+feed_icon = false
