@@ -24,3 +24,8 @@ theme = "dracula"
 [extra]
 copyright = "© $YEAR $AUTHOR"
 feed_icon = false
+
+main_menu = [
+    { name = "blog", url = "blog", trailing_slash = true },
+    { name = "about", url = "about", trailing_slash = true },
+]
