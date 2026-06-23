@@ -1,6 +1,6 @@
-base_url = "https://example.com"
-title = "My Blog"
-description = "A personal blog"
+base_url = "https://blog.rengaonline.in"
+title = "Renga's Learning"
+description = "Blog to add my leaning on tech contents"
 default_language = "en"
 # theme = ""  # set this to a theme name once you add one under themes/
 
@@ -19,4 +19,4 @@ highlight_code = true
 highlight_theme = "base16-ocean-dark"
 
 [extra]
-author = "Your Name"
+author = "Renganatha"
